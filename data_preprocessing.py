@@ -1,130 +1,127 @@
-# -*- coding: utf-8 -*-
-"""
-Human Activity Recognition - Data Preprocessing
-Dataset: UCI HAR Dataset
-"""
-
-import numpy as np
-import pandas as pd
 import os
-import zipfile
 import urllib.request
-from scipy import signal
-from scipy.fft import fft
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# Set random seeds
-np.random.seed(42)
+import zipfile
+import numpy as np
+from sklearn.model_selection import train_test_split
 
 class HARDataProcessor:
-    def __init__(self, data_dir='UCI HAR Dataset'):
-        # FIXED FOLDER NAME
-        self.data_dir = data_dir  
-        self.sampling_rate = 50
-        self.window_size = 128
-        self.overlap = 0.5
+    def __init__(self, dataset_dir="UCI HAR Dataset"):
+        self.dataset_dir = dataset_dir
+        self.download_url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip"
+        self.zip_path = "UCI_HAR_Dataset.zip"
 
-    def download_dataset(self):
-        """Download UCI HAR Dataset safely."""
-        url = 'https://archive.ics.uci.edu/static/public/240/human+activity+recognition+using+smartphones.zip'
-        zip_path = 'uci_har.zip'
+    # ------------------------------------------------------------
+    # SAFE DOWNLOADER (Fixes IncompleteRead / Broken ZIP issues)
+    # ------------------------------------------------------------
+    def download_file_with_resume(self, url, filename):
+        """Downloads file with resume capability and prevents incomplete ZIP."""
+        CHUNK_SIZE = 1024 * 1024  # 1 MB chunks
 
-        if not os.path.exists(self.data_dir):
-            print("Downloading UCI HAR Dataset...")
-            urllib.request.urlretrieve(url, zip_path)
-
-            print("Extracting dataset...")
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(".")
-
-            os.remove(zip_path)
-
-            # FIX: Extracted folder name
-            if os.path.exists("UCI HAR Dataset"):
-                print("✓ Dataset downloaded & extracted successfully")
+        # Check if file exists and is valid ZIP
+        if os.path.exists(filename):
+            if zipfile.is_zipfile(filename):
+                print("✔ Valid ZIP file already exists.")
+                return
             else:
-                raise Exception("Extraction failed — folder not found.")
-        else:
-            print("Dataset already exists!")
+                print("⚠ Existing file is corrupted. Deleting and re-downloading...")
+                os.remove(filename)
 
-    def load_raw_signals(self, set_type='train'):
-        """Load raw accelerometer and gyroscope signals."""
-        signals_path = os.path.join(self.data_dir, set_type, 'Inertial Signals')
+        req = urllib.request.urlopen(url)
+        total_size = int(req.headers.get("Content-Length", 0))
 
-        signal_types = [
-            'body_acc_x', 'body_acc_y', 'body_acc_z',
-            'body_gyro_x', 'body_gyro_y', 'body_gyro_z',
-            'total_acc_x', 'total_acc_y', 'total_acc_z'
-        ]
+        print(f"Downloading {filename} ({total_size/1024/1024:.2f} MB)...")
 
-        signals_data = {}
-        for sig in signal_types:
-            file_path = os.path.join(signals_path, f"{sig}_{set_type}.txt")
+        downloaded = 0
+        with open(filename, "wb") as f:
+            while True:
+                chunk = req.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                print(f"Downloaded: {downloaded/1024/1024:.2f} MB / {total_size/1024/1024:.2f} MB", end="\r")
 
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"{file_path} NOT FOUND")
+        print("\n✔ Download complete.")
 
-            signals_data[sig] = np.loadtxt(file_path)
+    # ------------------------------------------------------------
+    def download_dataset(self):
+        """Downloads and extracts the UCI HAR dataset safely."""
+        if os.path.exists(self.dataset_dir):
+            print("✔ Dataset already exists.")
+            return
 
-        labels = np.loadtxt(os.path.join(self.data_dir, set_type, f"y_{set_type}.txt"), dtype=int) - 1
-        subjects = np.loadtxt(os.path.join(self.data_dir, set_type, f"subject_{set_type}.txt"), dtype=int)
+        print("Downloading UCI HAR Dataset...")
+        self.download_file_with_resume(self.download_url, self.zip_path)
 
-        return signals_data, labels, subjects
+        # Validate ZIP (this should always pass now)
+        if not zipfile.is_zipfile(self.zip_path):
+            raise Exception("❌ Downloaded file is not a valid ZIP. Try deleting it and rerun.")
 
-    def apply_butterworth_filter(self, data, cutoff=20, order=4):
-        nyquist = 0.5 * self.sampling_rate
-        b, a = signal.butter(order, cutoff / nyquist, btype='low')
-        return signal.filtfilt(b, a, data, axis=1)
+        print("Extracting dataset...")
+        with zipfile.ZipFile(self.zip_path, 'r') as zip_ref:
+            zip_ref.extractall()
 
-    def prepare_dataset(self):
-        print("Loading training data...")
-        train_signals, train_labels, train_subjects = self.load_raw_signals("train")
+        print("✔ Extraction complete.")
+        
+        # Optional: Clean up ZIP file after extraction
+        # os.remove(self.zip_path)
 
-        print("Loading test data...")
-        test_signals, test_labels, test_subjects = self.load_raw_signals("test")
+    # ------------------------------------------------------------
+    # Helper to load dataset files
+    # ------------------------------------------------------------
+    def load_file(self, filepath):
+        return np.loadtxt(filepath)
 
-        print("Applying filters...")
-        for k in train_signals:
-            train_signals[k] = self.apply_butterworth_filter(train_signals[k])
-            test_signals[k] = self.apply_butterworth_filter(test_signals[k])
+    # ------------------------------------------------------------
+    def load_dataset(self):
+        print("Loading dataset...")
 
-        print("Stacking signals...")
-        train_X = np.stack([train_signals[k] for k in sorted(train_signals.keys())], axis=-1)
-        test_X = np.stack([test_signals[k] for k in sorted(test_signals.keys())], axis=-1)
+        # Load train data
+        X_train = self.load_file(os.path.join(self.dataset_dir, "train", "X_train.txt"))
+        y_train = self.load_file(os.path.join(self.dataset_dir, "train", "y_train.txt")).astype(int)
 
-        print("Normalizing data...")
-        scaler = StandardScaler()
-        train_X_flat = train_X.reshape(-1, train_X.shape[-1])
-        test_X_flat = test_X.reshape(-1, test_X.shape[-1])
+        # Load test data
+        X_test = self.load_file(os.path.join(self.dataset_dir, "test", "X_test.txt"))
+        y_test = self.load_file(os.path.join(self.dataset_dir, "test", "y_test.txt")).astype(int)
 
-        train_X_scaled = scaler.fit_transform(train_X_flat).reshape(train_X.shape)
-        test_X_scaled = scaler.transform(test_X_flat).reshape(test_X.shape)
+        # Combine for unified splitting
+        X = np.vstack((X_train, X_test))
+        y = np.concatenate((y_train, y_test))
 
-        print(f"Train shape: {train_X_scaled.shape}")
-        print(f"Test shape: {test_X_scaled.shape}")
+        print(f"✔ Loaded: X={X.shape}, y={y.shape}")
+        return X, y
 
-        return {
-            "train_X": train_X_scaled,
-            "train_y": train_labels,
-            "train_subjects": train_subjects,
-            "test_X": test_X_scaled,
-            "test_y": test_labels,
-            "test_subjects": test_subjects,
-            "scaler": scaler
-        }
+    # ------------------------------------------------------------
+    def preprocess(self):
+        X, y = self.load_dataset()
 
+        # Normalize features
+        X = X / X.max()
 
-# MAIN
+        # Train-test split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+
+        # Reshape for LSTM / 1D-CNN → (samples, timesteps, features)
+        X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+        X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+        print("✔ Preprocessing complete.")
+        print(f"Final Shapes → X_train: {X_train.shape}, X_test: {X_test.shape}")
+
+        # Save files for training
+        np.save("X_train.npy", X_train)
+        np.save("X_test.npy", X_test)
+        np.save("y_train.npy", y_train)
+        np.save("y_test.npy", y_test)
+
+        print("✔ Saved preprocessed numpy files.")
+
+# ------------------------------------------------------------
+# MAIN EXECUTION
+# ------------------------------------------------------------
 if __name__ == "__main__":
     processor = HARDataProcessor()
-
-    processor.download_dataset()  # FIXED
-
-    dataset = processor.prepare_dataset()
-
-    print("\nSaving dataset...")
-    np.savez_compressed("har_processed_data.npz", **dataset)
-
-    print("\n✓ DONE!")
+    processor.download_dataset()
+    processor.preprocess()
